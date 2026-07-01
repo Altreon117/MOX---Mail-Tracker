@@ -1,0 +1,13 @@
+# Environnements virtuels
+venv/
+env/
+
+# Fichiers compilés
+__pycache__/
+*.pyc
+
+# Fichiers de la cliente (Sécurité stricte)
+*.xlsx
+*.csv
+*.log
+.env
