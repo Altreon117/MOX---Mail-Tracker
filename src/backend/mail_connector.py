@@ -2,20 +2,29 @@ import os
 import re
 from imap_tools import MailBox, AND
 from dotenv import load_dotenv
+from PyQt6.QtCore import QSettings
 
 class MailConnector:
     def __init__(self):
-        # Charge les variables cachées du fichier .env
         load_dotenv()
         self.email = os.getenv("EMAIL_COMPTE")
         self.password = os.getenv("EMAIL_PASSWORD")
         self.imap_server = 'imap.gmail.com'
+        
+        # On lit les paramètres globaux
+        self.settings = QSettings("MonEntreprise", "SuiviRapports")
 
     def check_new_reports(self):
-        """Se connecte à Gmail, extrait les noms des nouveaux rapports signés."""
         if not self.email or not self.password:
             print("Erreur : Identifiants introuvables dans le fichier .env")
             return []
+
+        # On récupère le modèle utilisateur (ex: rapport_expertise_psychologique-X- X)
+        template = self.settings.value("subject_template", "rapport_expertise_psychologique-X- X", type=str)
+        
+        # On protège le texte classique, puis on remplace le "X" par un groupe de capture Regex (.*?)
+        # La regex finale ressemblera à : rapport\_expertise\_psychologique\-(.*?)\-\ (.*?)
+        regex_pattern = re.escape(template).replace('X', '(.*?)')
 
         print("Connexion à Gmail en cours pour vérification...")
         nouveaux_rapports = []
@@ -23,21 +32,17 @@ class MailConnector:
         try:
             with MailBox(self.imap_server).login(self.email, self.password) as mailbox:
                 
-                # On cherche les mails contenant notre mot-clé
-                # NOTE: Pour tes tests, enlève `, seen=False` si le mail de test est déjà "lu"
-                criteres = AND(subject='rapport_expertise_psychologique', seen=False)
-                
-                for msg in mailbox.fetch(criteres):
+                # On lit tous les mails non lus
+                for msg in mailbox.fetch(AND(seen=False)):
                     sujet = msg.subject
                     
-                    # Regex pour capturer le texte entre "psychologique-" et "- XX/XX/XXXX"
-                    match = re.search(r'rapport_expertise_psychologique-(.*?)-', sujet)
+                    # On compare le sujet avec la Regex générée dynamiquement
+                    match = re.search(regex_pattern, sujet)
                     
                     if match:
+                        # Le premier "X" capturé (group 1) est toujours le nom du client dans notre logique
                         nom_complet = match.group(1).strip()
                         
-                        # Logique simple de séparation Nom / Prénom
-                        # On part du principe que le dernier mot est le prénom
                         parts = nom_complet.split(' ')
                         if len(parts) > 1:
                             prenom = parts[-1].capitalize()
