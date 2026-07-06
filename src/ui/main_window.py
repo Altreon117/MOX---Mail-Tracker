@@ -6,15 +6,16 @@ from PyQt6.QtWidgets import (QMainWindow, QSystemTrayIcon, QMenu, QApplication,
 from PyQt6.QtGui import QAction, QIcon
 from PyQt6.QtCore import QTimer, Qt
 
-# On importe APP_NAME en plus
 from config import CHECK_INTERVAL_MS, EXCEL_FILE_PATH, APP_NAME
 from src.backend.excel_manager import ExcelManager
 
+# On importe notre nouveau composant
+from src.ui.row_component import RowComponent
+
 # --- HACK WINDOWS BARRE DES TÂCHES ---
-# Permet d'afficher notre icône au lieu de celle de Python pendant le développement
 if os.name == 'nt':
     import ctypes
-    myappid = 'monentreprise.suivirapports.app.1' # Identifiant arbitraire unique
+    myappid = 'monentreprise.suivirapports.app.1'
     ctypes.windll.shell32.SetCurrentProcessExplicitAppUserModelID(myappid)
 
 class MainWindow(QMainWindow):
@@ -23,51 +24,48 @@ class MainWindow(QMainWindow):
         self.setWindowTitle(APP_NAME)
         self.resize(400, 600)
         
-        # 1. Chargement de l'icône personnalisée
         icon_path = os.path.abspath("assets/app_icon.ico")
         self.app_icon = QIcon(icon_path)
         self.setWindowIcon(self.app_icon)
         
-        # 2. Initialisation des gestionnaires
         self.excel_manager = ExcelManager(EXCEL_FILE_PATH)
         
-        # 3. Configuration de l'UI et du Background
         self.setup_ui()
         self.setup_tray_icon()
         self.setup_timer()
         
-        # 4. Charger les fausses données pour tester le visuel
-        self.load_dummy_data()
+        # On charge la vraie donnée depuis l'Excel
+        self.load_data_from_excel()
 
     def setup_ui(self):
-        """Construit l'interface graphique principale."""
         central_widget = QWidget()
         self.setCentralWidget(central_widget)
-        
         main_layout = QVBoxLayout(central_widget)
         
-        # --- HEADER (Barre de recherche + Bouton Refresh) ---
+        # --- HEADER ---
         header_layout = QHBoxLayout()
         
         self.search_bar = QLineEdit()
         self.search_bar.setPlaceholderText("Search ...")
+        # Activation de la recherche en temps réel
+        self.search_bar.textChanged.connect(self.filter_reports)
         
-        # Configuration dynamique du bouton Refresh
-        self.refresh_btn = QPushButton()
+        # Nouveau bouton Refresh 100% texte (Unicode)
+        self.refresh_btn = QPushButton("↻") 
         self.refresh_btn.setFixedSize(30, 30)
         
-        refresh_icon_path = os.path.abspath("assets/refresh_icon.ico")
-        if os.path.exists(refresh_icon_path):
-            self.refresh_btn.setIcon(QIcon(refresh_icon_path))
-        else:
-            self.refresh_btn.setText("🔄") # Fallback si le fichier n'existe pas
+        # On grossit un peu la police pour que le symbole prenne bien l'espace
+        font = self.refresh_btn.font()
+        font.setPointSize(14)
+        font.setBold(True)
+        self.refresh_btn.setFont(font)
             
         self.refresh_btn.clicked.connect(self.run_background_check)
         
         header_layout.addWidget(self.search_bar)
         header_layout.addWidget(self.refresh_btn)
         
-        # --- BODY (Zone défilante pour les rapports) ---
+        # --- BODY ---
         self.scroll_area = QScrollArea()
         self.scroll_area.setWidgetResizable(True)
         
@@ -80,42 +78,49 @@ class MainWindow(QMainWindow):
         main_layout.addLayout(header_layout)
         main_layout.addWidget(self.scroll_area)
 
-    def load_dummy_data(self):
-        """Crée des composants visuels à partir des fausses données."""
-        mock_data = self.excel_manager.get_mock_data()
+    def load_data_from_excel(self):
+        """Lit l'Excel et instancie un RowComponent par ligne."""
+        # On vide la liste actuelle avant de recharger
+        for i in reversed(range(self.reports_layout.count())): 
+            self.reports_layout.itemAt(i).widget().setParent(None)
+
+        excel_data = self.excel_manager.read_data()
         
-        for data in mock_data:
-            item_frame = QFrame()
-            item_frame.setFrameShape(QFrame.Shape.StyledPanel)
-            item_layout = QHBoxLayout(item_frame)
-            
-            name_label = QLabel(data["client"])
-            status_label = QLabel(data["status"])
-            
-            item_layout.addWidget(name_label)
-            item_layout.addWidget(status_label)
-            
-            self.reports_layout.addWidget(item_frame)
+        for data in excel_data:
+            # On instancie le composant en lui passant la donnée et la fonction de sauvegarde
+            row = RowComponent(data, self.on_status_changed)
+            self.reports_layout.addWidget(row)
+
+    def filter_reports(self, text):
+        """Filtre les composants affichés selon le texte de la barre de recherche."""
+        search_text = text.lower()
+        for i in range(self.reports_layout.count()):
+            widget = self.reports_layout.itemAt(i).widget()
+            if isinstance(widget, RowComponent):
+                client_name = widget.data["client"].lower()
+                # On cache le composant si le nom ne correspond pas à la recherche
+                widget.setVisible(search_text in client_name)
+
+    def on_status_changed(self, client_name):
+        """Callback appelé par un RowComponent quand on clique sur 'Rapport reçu'."""
+        self.excel_manager.update_status_to_recu(client_name)
+        print(f"Statut mis à jour dans l'Excel pour {client_name}")
 
     # --- MÉTHODES DE BACKGROUND ---
 
     def setup_tray_icon(self):
         self.tray_icon = QSystemTrayIcon(self)
         self.tray_icon.setIcon(self.app_icon)
-        
-        # Ajout du texte au survol (Tooltip)
         self.tray_icon.setToolTip(APP_NAME)
         
         tray_menu = QMenu()
         
-        # Nouvelle action : Scan Mail
         scan_action = QAction("Scan Mail", self)
         scan_action.triggered.connect(self.run_background_check)
         tray_menu.addAction(scan_action)
         
-        tray_menu.addSeparator() # Petit séparateur visuel propre
+        tray_menu.addSeparator()
         
-        # Modification de l'action Quitter avec le nom de l'app
         quit_action = QAction(f"Quitter {APP_NAME}", self)
         quit_action.triggered.connect(QApplication.instance().quit)
         tray_menu.addAction(quit_action)
@@ -131,6 +136,7 @@ class MainWindow(QMainWindow):
 
     def run_background_check(self):
         print("Vérification manuelle ou automatique lancée...")
+        # On rechargera les données de l'Excel ici après le scan
 
     def on_tray_click(self, reason):
         if reason == QSystemTrayIcon.ActivationReason.DoubleClick:
