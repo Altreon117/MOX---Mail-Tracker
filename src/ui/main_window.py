@@ -10,6 +10,7 @@ from PyQt6.QtCore import QTimer, Qt
 from config import CHECK_INTERVAL_MS, EXCEL_FILE_PATH, APP_NAME
 from src.backend.excel_manager import ExcelManager
 from src.ui.row_component import RowComponent
+from src.backend.mail_connector import MailConnector
 
 if os.name == 'nt':
     import ctypes
@@ -57,6 +58,7 @@ class MainWindow(QMainWindow):
         self.setWindowIcon(self.app_icon)
         
         self.excel_manager = ExcelManager(EXCEL_FILE_PATH)
+        self.mail_connector = MailConnector()
         
         self.setup_ui()
         self.setup_tray_icon()
@@ -180,6 +182,26 @@ class MainWindow(QMainWindow):
 
     def run_background_check(self):
         print("Vérification manuelle ou automatique lancée...")
+        
+        # 1. On lance la lecture des mails
+        nouveaux = self.mail_connector.check_new_reports()
+        
+        # 2. Si on a trouvé des nouveaux rapports
+        if nouveaux:
+            for nom, prenom in nouveaux:
+                # Ajout dans le fichier Excel (le N° de commande sera "N/A" par défaut)
+                self.excel_manager.add_new_report(nom, prenom, "N/A")
+                
+            # 3. On recharge l'interface graphique pour les afficher
+            self.load_data_from_excel()
+            
+            # 4. On affiche une notification Windows
+            self.tray_icon.showMessage(
+                "Nouveaux rapports !",
+                f"{len(nouveaux)} rapport(s) signé(s) ajouté(s) à la liste.",
+                QSystemTrayIcon.MessageIcon.Information,
+                4000 # Durée d'affichage en millisecondes
+            )
 
     def on_tray_click(self, reason):
         if reason == QSystemTrayIcon.ActivationReason.DoubleClick:
