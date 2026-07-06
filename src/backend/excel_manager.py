@@ -1,4 +1,5 @@
 import os
+from datetime import datetime
 from openpyxl import Workbook, load_workbook
 
 class ExcelManager:
@@ -7,48 +8,60 @@ class ExcelManager:
         self.ensure_file_exists()
 
     def ensure_file_exists(self):
-        """Vérifie si l'Excel existe. Sinon, crée le fichier avec en-têtes ET fausses données."""
         if not os.path.exists(self.file_path):
             print(f"Création du fichier {self.file_path} avec données de test...")
             wb = Workbook()
             ws = wb.active
             ws.title = "Rapports"
             
-            # Création des en-têtes
-            headers = ["client", "professionnel", "numero_commande", "status", "date_envoi", "date_reception"]
+            # NOUVEAU : Séparation de 'nom' et 'prenom'
+            headers = ["nom", "prenom", "professionnel", "numero_commande", "status", "date_envoi", "date_reception"]
             ws.append(headers)
             
-            # Injection des fausses données directement dans les cellules Excel
-            ws.append(["Raphaël PHAN", "Dr. Goetz", "N/A", "Envoyé", "19/06/2026", ""])
-            ws.append(["Pablo LANCEL", "Dr. Goetz", "N/A", "Reçu", "19/06/2026", "20/06/2026"])
+            ws.append(["PHAN", "Raphaël", "Dr. Goetz", "N/A", "Envoyé", "19/06/2026", ""])
+            ws.append(["CIBIEL", "Naomie", "Dr. Goetz", "Z0130819440", "Reçu", "19/06/2026", "20/06/2026"])
             
             wb.save(self.file_path)
 
     def read_data(self):
-        """Lit le fichier Excel et renvoie une liste de dictionnaires pour l'UI."""
         wb = load_workbook(self.file_path)
         ws = wb.active
         data = []
         
-        # On lit à partir de la ligne 2 pour ignorer les en-têtes
         for row in ws.iter_rows(min_row=2, values_only=True):
-            if row[0]:  # Si la cellule "client" n'est pas vide
+            if row[0] and row[1]: # Vérifie que nom et prénom existent
                 data.append({
-                    "client": row[0],
-                    "professionnel": row[1],
-                    "numero_commande": row[2],
-                    "status": row[3],
-                    "date_envoi": row[4],
-                    "date_reception": row[5]
+                    "nom": row[0],
+                    "prenom": row[1],
+                    "professionnel": row[2],
+                    "numero_commande": row[3],
+                    "status": row[4],
+                    "date_envoi": row[5],
+                    "date_reception": row[6]
                 })
         return data
 
-    def update_status_to_recu(self, client_name):
-        """Cherche le client dans l'Excel et met son statut à 'Reçu'."""
+    def update_status_to_recu(self, nom, prenom):
         wb = load_workbook(self.file_path)
         ws = wb.active
+        date_jour = datetime.now().strftime("%d/%m/%Y")
+        
         for row in ws.iter_rows(min_row=2):
-            if row[0].value == client_name:
-                row[3].value = "Reçu"  # La colonne D (index 3) est le status
+            # On vérifie maintenant le nom ET le prénom
+            if row[0].value == nom and row[1].value == prenom:
+                row[4].value = "Reçu"      # Index 4 = status
+                row[6].value = date_jour   # Index 6 = date_reception
                 break
+        wb.save(self.file_path)
+
+    def add_new_report(self, nom, prenom, numero_commande):
+        wb = load_workbook(self.file_path)
+        ws = wb.active
+        
+        date_jour = datetime.now().strftime("%d/%m/%Y")
+        if not numero_commande:
+            numero_commande = "N/A"
+            
+        nouvelle_ligne = [nom, prenom, "Dr. Goetz", numero_commande, "Envoyé", date_jour, ""]
+        ws.append(nouvelle_ligne)
         wb.save(self.file_path)

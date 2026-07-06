@@ -2,21 +2,49 @@ import os
 import sys
 from PyQt6.QtWidgets import (QMainWindow, QSystemTrayIcon, QMenu, QApplication, 
                              QWidget, QVBoxLayout, QHBoxLayout, QLineEdit, 
-                             QPushButton, QScrollArea, QLabel, QFrame)
+                             QPushButton, QScrollArea, QLabel, QFrame,
+                             QDialog, QFormLayout, QDialogButtonBox, QMessageBox)
 from PyQt6.QtGui import QAction, QIcon
 from PyQt6.QtCore import QTimer, Qt
 
 from config import CHECK_INTERVAL_MS, EXCEL_FILE_PATH, APP_NAME
 from src.backend.excel_manager import ExcelManager
-
-# On importe notre nouveau composant
 from src.ui.row_component import RowComponent
 
-# --- HACK WINDOWS BARRE DES TÂCHES ---
 if os.name == 'nt':
     import ctypes
     myappid = 'monentreprise.suivirapports.app.1'
     ctypes.windll.shell32.SetCurrentProcessExplicitAppUserModelID(myappid)
+
+class AddReportDialog(QDialog):
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self.setWindowTitle("Ajouter un rapport manuellement")
+        self.resize(300, 180)
+        
+        layout = QFormLayout(self)
+        
+        self.nom_input = QLineEdit()
+        self.prenom_input = QLineEdit()
+        self.cmd_input = QLineEdit()
+        self.cmd_input.setPlaceholderText("Optionnel (ex: Z01308...)")
+        
+        layout.addRow("Nom :", self.nom_input)
+        layout.addRow("Prénom :", self.prenom_input)
+        layout.addRow("N° de commande :", self.cmd_input)
+        
+        self.button_box = QDialogButtonBox(QDialogButtonBox.StandardButton.Ok | QDialogButtonBox.StandardButton.Cancel)
+        self.button_box.accepted.connect(self.accept)
+        self.button_box.rejected.connect(self.reject)
+        
+        layout.addWidget(self.button_box)
+        
+    def get_data(self):
+        # On force le nom de famille en majuscules pour garder un fichier Excel propre
+        return (self.nom_input.text().strip().upper(), 
+                self.prenom_input.text().strip(), 
+                self.cmd_input.text().strip())
+
 
 class MainWindow(QMainWindow):
     def __init__(self):
@@ -34,7 +62,6 @@ class MainWindow(QMainWindow):
         self.setup_tray_icon()
         self.setup_timer()
         
-        # On charge la vraie donnée depuis l'Excel
         self.load_data_from_excel()
 
     def setup_ui(self):
@@ -47,19 +74,14 @@ class MainWindow(QMainWindow):
         
         self.search_bar = QLineEdit()
         self.search_bar.setPlaceholderText("Search ...")
-        # Activation de la recherche en temps réel
         self.search_bar.textChanged.connect(self.filter_reports)
         
-        # Nouveau bouton Refresh 100% texte (Unicode)
         self.refresh_btn = QPushButton("↻") 
         self.refresh_btn.setFixedSize(30, 30)
-        
-        # On grossit un peu la police pour que le symbole prenne bien l'espace
         font = self.refresh_btn.font()
         font.setPointSize(14)
         font.setBold(True)
         self.refresh_btn.setFont(font)
-            
         self.refresh_btn.clicked.connect(self.run_background_check)
         
         header_layout.addWidget(self.search_bar)
@@ -75,36 +97,58 @@ class MainWindow(QMainWindow):
         
         self.scroll_area.setWidget(self.reports_container)
         
+        # --- BOUTON AJOUTER ---
+        self.add_btn = QPushButton("➕ Ajouter un rapport")
+        self.add_btn.setFixedHeight(40)
+        self.add_btn.setCursor(Qt.CursorShape.PointingHandCursor)
+        self.add_btn.setStyleSheet("""
+            QPushButton {
+                background-color: #444;
+                border-radius: 5px;
+                font-weight: bold;
+            }
+            QPushButton:hover {
+                background-color: #555;
+            }
+        """)
+        self.add_btn.clicked.connect(self.open_add_dialog)
+        
         main_layout.addLayout(header_layout)
         main_layout.addWidget(self.scroll_area)
+        main_layout.addWidget(self.add_btn)
+
+    def open_add_dialog(self):
+        dialog = AddReportDialog(self)
+        if dialog.exec():
+            nom, prenom, numero_commande = dialog.get_data()
+            if nom and prenom: 
+                self.excel_manager.add_new_report(nom, prenom, numero_commande)
+                self.load_data_from_excel() 
+            else:
+                QMessageBox.warning(self, "Erreur", "Le nom et le prénom sont obligatoires.")
 
     def load_data_from_excel(self):
-        """Lit l'Excel et instancie un RowComponent par ligne."""
-        # On vide la liste actuelle avant de recharger
         for i in reversed(range(self.reports_layout.count())): 
             self.reports_layout.itemAt(i).widget().setParent(None)
 
         excel_data = self.excel_manager.read_data()
         
         for data in excel_data:
-            # On instancie le composant en lui passant la donnée et la fonction de sauvegarde
             row = RowComponent(data, self.on_status_changed)
             self.reports_layout.addWidget(row)
 
     def filter_reports(self, text):
-        """Filtre les composants affichés selon le texte de la barre de recherche."""
         search_text = text.lower()
         for i in range(self.reports_layout.count()):
             widget = self.reports_layout.itemAt(i).widget()
             if isinstance(widget, RowComponent):
-                client_name = widget.data["client"].lower()
-                # On cache le composant si le nom ne correspond pas à la recherche
-                widget.setVisible(search_text in client_name)
+                # On concatène nom et prénom pour que la recherche trouve les deux
+                nom_complet = f"{widget.data['nom']} {widget.data['prenom']}".lower()
+                widget.setVisible(search_text in nom_complet)
 
-    def on_status_changed(self, client_name):
-        """Callback appelé par un RowComponent quand on clique sur 'Rapport reçu'."""
-        self.excel_manager.update_status_to_recu(client_name)
-        print(f"Statut mis à jour dans l'Excel pour {client_name}")
+    def on_status_changed(self, nom, prenom):
+        self.excel_manager.update_status_to_recu(nom, prenom)
+        print(f"Statut mis à jour dans l'Excel pour {prenom} {nom}")
 
     # --- MÉTHODES DE BACKGROUND ---
 
@@ -136,7 +180,6 @@ class MainWindow(QMainWindow):
 
     def run_background_check(self):
         print("Vérification manuelle ou automatique lancée...")
-        # On rechargera les données de l'Excel ici après le scan
 
     def on_tray_click(self, reason):
         if reason == QSystemTrayIcon.ActivationReason.DoubleClick:
